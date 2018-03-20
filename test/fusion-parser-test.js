@@ -2,22 +2,104 @@ const expect = require('chai').expect;
 const fusionParser = require('../dist/fusion-parser');
 
 describe('parser', () => {
-  it('parses a single declaration', () => {
+  it('parses a single definition', () => {
     const tree = fusionParser.parse(`foo.bar = "Test"`);
-    expect(tree).to.have.property('foo');
-    expect(tree.foo).to.have.property('bar');
+    expect(tree).to.deep.equal([
+      {
+        kind: 'definition',
+        path: [
+          {
+            property: 'foo'
+          },
+          {
+            property: 'bar'
+          }
+        ],
+        value: {
+          simpleValue: 'Test'
+        }
+      }
+    ]);
   });
 
-  it('parses multiple declarations', () => {
+  it('parses multiple definitions', () => {
     const tree = fusionParser.parse(`
       foo = "Test"
       'foo' {
         @process.answer = 42
       }
     `);
-    expect(tree).to.have.property('foo');
-    expect(tree.foo).to.have.property('__value');
-    expect(tree.foo).to.have.property('@process');
+    expect(tree).to.deep.equal([
+      {
+        kind: 'definition',
+        path: [
+          {
+            property: 'foo'
+          }
+        ],
+        value: {
+          simpleValue: 'Test'
+        }
+      },
+      {
+        kind: 'definition',
+        path: [
+          {
+            property: 'foo'
+          }
+        ],
+        block: [
+          {
+            kind: 'definition',
+            path: [
+              {
+                property: '@process'
+              },
+              {
+                property: 'answer'
+              }
+            ],
+            value: {
+              simpleValue: 42
+            }
+          }
+        ]
+      }
+    ]);
+  });
+
+  it('parses object definition with block', () => {
+    const tree = fusionParser.parse(`
+      renderer = Neos.Fusion:Value {
+        value = \${props.foo}
+      }
+    `);
+    expect(tree).to.deep.equal([
+      {
+        kind: 'definition',
+        path: [
+          {
+            property: 'renderer'
+          }
+        ],
+        value: {
+          objectName: 'Neos.Fusion:Value'
+        },
+        block: [
+          {
+            kind: 'definition',
+            path: [
+              {
+                property: 'value'
+              }
+            ],
+            value: {
+              expression: 'props.foo'
+            }
+          }
+        ]
+      }
+    ]);
   });
 
   it('parses a first level prototype', () => {
@@ -26,9 +108,29 @@ describe('parser', () => {
         @class = 'My\\\\Implementation\\\\Class'
       }
     `);
-    expect(tree).to.have.property('__prototypes');
-    expect(tree['__prototypes']).to.have.property('My.Package:Object.Name');
-    expect(tree['__prototypes']['My.Package:Object.Name']).to.have.property('@class');
+    expect(tree).to.deep.equal([
+      {
+        kind: 'definition',
+        path: [
+          {
+            prototype: 'My.Package:Object.Name'
+          }
+        ],
+        block: [
+          {
+            kind: 'definition',
+            path: [
+              {
+                property: '@class'
+              }
+            ],
+            value: {
+              simpleValue: 'My\\\\Implementation\\\\Class'
+            }
+          }
+        ]
+      }
+    ])
   });
 
   it('parses nested prototypes', () => {
@@ -39,21 +141,42 @@ describe('parser', () => {
         }
       }
     `);
-    expect(tree).to.deep.equal({
-      __prototypes: {
-        "My.Package:Object.Name": {
-          __prototypes: {
-            "My.Package:Other.Object": {
-              "@if": {
-                notEmpty: {
-                  __value: true
+    expect(tree).to.deep.equal([
+      {
+        kind: 'definition',
+        path: [
+          {
+            prototype: 'My.Package:Object.Name'
+          }
+        ],
+        block: [
+          {
+            kind: 'definition',
+            path: [
+              {
+                prototype: 'My.Package:Other.Object'
+              }
+            ],
+            block: [
+              {
+                kind: 'definition',
+                path: [
+                  {
+                    property: '@if'
+                  },
+                  {
+                    property: 'notEmpty'
+                  }
+                ],
+                value: {
+                  simpleValue: true
                 }
               }
-            }
+            ]
           }
-        }
+        ]
       }
-    });
+    ]);
   });
 
   it('parses includes', () => {
@@ -62,15 +185,27 @@ describe('parser', () => {
       foo = "bar"
       include: 'Another/Custom/Object.fusion'
     `);
-    expect(tree).to.deep.equal({
-      __includes: {
-        'My/Custom/Object.fusion': {},
-        'Another/Custom/Object.fusion': {}
+    expect(tree).to.deep.equal([
+      {
+        kind: 'include',
+        pattern: 'My/Custom/Object.fusion'
       },
-      foo: {
-        __value: 'bar'
+      {
+        kind: 'definition',
+        path: [
+          {
+            property: 'foo',
+          }
+        ],
+        value: {
+          simpleValue: 'bar'
+        }
+      },
+      {
+        kind: 'include',
+        pattern: 'Another/Custom/Object.fusion'
       }
-    });
+    ]);
   });
 
   it('parses complex Fusion', () => {
@@ -107,8 +242,7 @@ describe('parser', () => {
       # The default is to use a render path of "page", unless the requested format is not "html"
       # in which case the format string will be used as the render path (with dots replaced by slashes)
       #
-      root = Neos.Fusion:Case
-      root {
+      root = Neos.Fusion:Case {
         shortcut {
           prototype(Neos.Neos:Page) {
             body = Neos.Neos:Shortcut
@@ -173,5 +307,24 @@ describe('parser', () => {
         editPreviewMode = \${documentNode.context.currentRenderingMode.name}
       }
     `)
+  });
+
+  describe('with addLocation', () => {
+    it('adds loc to all levels', () => {
+      const tree = fusionParser.parse(`
+        prototype(My.Package:Object.Name) {
+          prototype(My.Package:Other.Object) {
+            @if.notEmpty = true
+          }
+        }
+        foo = My.Package:Other.Object
+      `.trim(), { addLocation: true });
+
+      expect(tree).to.have.length(2);
+      expect(tree[1]).to.nested.include({
+        'loc.start.line': 6,
+        'loc.start.column': 9
+      });
+    });
   });
 });

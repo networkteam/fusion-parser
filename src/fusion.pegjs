@@ -26,16 +26,13 @@
 }
 
 Root
-  = defs:(Include / Definition / Comment)* {
-    return defs.reduce(function(result, def) {
-     	mergeDeep(result, def);
-        return result;
-    }, {});
-  }
+  = (Include / Definition / Comment)*
 
 Comment
   = LineComment / BlockComment {
-    return {};
+    return {
+      kind: 'comment'
+    };
   }
 
 LineComment
@@ -46,11 +43,14 @@ BlockComment
 
 Include
   = _ "include:" _ pattern:(StringLiteral / FilePattern) _ {
-    return {
-      "__includes": {
-        [pattern]: {}
-      }
+    let result = {
+      kind: 'include',
+      pattern
     };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
   }
 
 FilePattern
@@ -59,11 +59,8 @@ FilePattern
   }
 
 Definitions
-  = defs:((Definition / Comment)*) {
-    return defs.reduce(function(result, def) {
-     	mergeDeep(result, def);
-        return result;
-    }, {});
+  = defs:(Definition / Comment)* {
+    return defs;
   }
 
 Definition
@@ -73,69 +70,115 @@ Definition
 
 PropertyBlock
   = path:PropertyPath _ "{" _ defs:Definitions _ "}" {
-    var result = {}, cur = result;
-    path.forEach(function(p) {
-    	cur = cur[p] = {};
-    });
-    Object.assign(cur, defs);
-    // cur['__pos'] = location();
+    let result = {
+      kind: 'definition',
+      path,
+      block: defs
+    };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
     return result;
   }
 
 PropertyDefinition
-  = path:PropertyPath _ "=" _ def:(ExpressionLiteral / SimpleValue / Object) {
-    var result = {}, cur = result;
-    path.forEach(function(p) {
-    	cur = cur[p] = {};
-    });
-    Object.assign(cur, def);
-    // cur['__pos'] = location();
+  = path:PropertyPath _ "=" _ value:(ExpressionLiteral / SimpleValue / ObjectInstance) _ block:DefinitionsBlock? {
+    let result = {
+      kind: 'definition',
+      path,
+      value
+    };
+    if (block !== null) {
+      result.block = block;
+    }
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
     return result;
   }
 
+DefinitionsBlock
+  = "{" _ defs:Definitions _ "}" {
+    return defs;
+  }
+
 PropertyPath
-  = head:PropertyPathPart tail:("." PropertyPathPart)* {
-      return [head].concat(
-        // Skip the dot
-        tail.map(function(el) { return el[1]; })
-      ).reduce(function(result, path) {
-        return result.concat(path);
-      }, []);
-    }
+  = head:PropertyPathPart tail:(DotPropertyPathPart)* {
+    return [head].concat(tail);
+  }
+
+DotPropertyPathPart
+  = "." path:PropertyPathPart {
+    return path;
+  }
 
 PropertyPathPart
   = PrototypeName / PropertyName
 
-SimpleValue
-  = lit:Literal { return { "__value": lit } }
+SimpleValue "simple value"
+  = lit:Literal {
+    let result = { simpleValue: lit };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
+  }
 
 Literal "literal"
   = BooleanLiteral / NumberLiteral / StringLiteral
 
-Object
-  = name:ObjectName { return { "__objectName": name }; }
+ObjectInstance
+  = name:ObjectName {
+    let result = { objectName: name };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
+  }
 
 ObjectName
   = [a-zA-Z0-9.:]+ { return text(); }
 
 PropertyName
-  = name:(PropertyNameLiteral / StringLiteral) { return [name]; }
+  = name:(PropertyNameLiteral / StringLiteral) {
+    let result = { property: name };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
+  }
 
 PropertyNameLiteral
   = "@"? [a-zA-Z0-9:_\-]+ { return text(); }
 
 PrototypeName
-  = "prototype(" _ name:ObjectName _ ")" {
-    return ["__prototypes", name];
+  = "prototype(" _ result:PrototypeNameInner _ ")" {
+    return result;
+  }
+
+PrototypeNameInner
+  = name:ObjectName {
+    let result = { prototype: name };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
   }
 
 ExpressionLiteral
-  = "${" _ exp:Eel_Expression _ "}" { return { "__expression": exp }; }
+  = "${" _ exp:Eel_Expression _ "}" {
+    let result = { expression: exp };
+    if (options.addLocation) {
+      result['loc'] = location();
+    }
+    return result;
+  }
 
 _IntegerNumber
   = "-"? [0-9]+
 _Decimals
   = "." [0-9]+
+
 NumberLiteral
   = int:_IntegerNumber dec:_Decimals? {
     return parseFloat(text(), 10);
